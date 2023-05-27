@@ -33,22 +33,24 @@ plt.rcParams['axes.unicode_minus']=False #用来正常显示负号
 
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
-def regression_and_draw(X, y, X_names, df, path):
+def regression_and_draw(X, y, X_names, df, path, dummy_indicator="(单选)", replacement={}):
     # 有bug
     dt = DecisionTreeRegressor(criterion='friedman_mse', max_depth=4)
     
     dt.fit(X, y)
     
-    dot_data = tree.plot_tree(dt, feature_names=X_names)
+    dot_data = tree.plot_tree(dt, feature_names=X_names,)
     
-    dot_data = tree_to_dot(dt, y, X, X_names, df)
+    dot_data = tree_to_dot(dt, y, X, X_names, df, 
+                           dummy_indicator=dummy_indicator, replacement=replacement)
     graph = graphviz.Source(dot_data)  
     dot_data = dot_data.replace('helvetica', 'MicrosoftYaHei')
     graph = graphviz.Source(dot_data)  
     graph.render(filename=path, format="svg")
 
-def classification_and_draw(X, y, X_names, df, class_names, path):
-    dt = DecisionTreeClassifier(max_depth=4)
+def classification_and_draw(X, y, X_names, df, class_names, path, dummy_indicator="(单选)", replacement={}):
+    dt = DecisionTreeClassifier(criterion='log_loss',
+                                max_depth=4)
     dt.fit(X, y)
     
     dot_data = tree.export_graphviz(dt,
@@ -58,7 +60,8 @@ def classification_and_draw(X, y, X_names, df, class_names, path):
                        special_characters = True, 
                       filled=True)  
     
-    dot_data = tree_to_dot(dt, y, X, X_names, df, class_names=class_names)
+    dot_data = tree_to_dot(dt, y, X, X_names, df, class_names=class_names, 
+                           dummy_indicator=dummy_indicator, replacement=replacement)
     graph = graphviz.Source(dot_data)  
     dot_data = dot_data.replace('helvetica', 'MicrosoftYaHei')
     graph = graphviz.Source(dot_data)  
@@ -68,8 +71,8 @@ def get_yvec_xmat_vnames(xmat, target, df):
 
     yvec = df[target]
 
-    # 将拥有n个不同数值的变量转换为n个0/1的变量，变量名字中有"_isDummy_"作为标注
-    # xmat = pd.get_dummies(df.loc[:, df.columns != target], prefix_sep = "_isDummy_")
+    # 将拥有n个不同数值的变量转换为n个0/1的变量，变量名字中有dummy_indicator作为标注
+    # xmat = pd.get_dummies(df.loc[:, df.columns != target], prefix_sep = dummy_indicator)
 
     vnames = xmat.columns
 
@@ -85,7 +88,8 @@ def get_categorical_dict(df):
         categorical_dict[i]= sorted(list(set(df[i].astype('str'))))
     return categorical_dict
 
-def tree_to_dot(tree, yvec, xmat, vnames, df, class_names=None):
+def tree_to_dot(tree, yvec, xmat, vnames, df, class_names=None, 
+                dummy_indicator="(单选)", replacement={}):
     """ 把树变成dot data,用于输入graphviz然后绘制
     
     参数
@@ -106,12 +110,26 @@ def tree_to_dot(tree, yvec, xmat, vnames, df, class_names=None):
         # classes should be in descending order
         # class_names = sorted(list(set(yvec)))
         # class_names = [f"健康", f"有{y_columns[y_learn]}"]
-        return classification_tree_to_dot(tree, vnames, class_names, categorical_dict)
+        return classification_tree_to_dot(tree, vnames, class_names, categorical_dict, 
+                                          dummy_indicator=dummy_indicator, replacement=replacement)
     else:
-        return regression_tree_to_dot(tree, vnames, categorical_dict)
+        return regression_tree_to_dot(tree, vnames, categorical_dict, 
+                                      dummy_indicator=dummy_indicator, replacement=replacement)
+not_word = "不选"
 
-    
-def classification_tree_to_dot(tree, feature_names, class_names, categorical_dict):
+def replace(threshold_string, replacement, sep=", "):
+    thresholds = threshold_string.split(sep)
+    for i, k in enumerate(thresholds):
+        if k in replacement:
+            thresholds[i] = replacement[k]
+        if k.startswith(not_word):
+            key = k[len(not_word):]
+            if key in replacement:
+                thresholds[i] = not_word+replacement[key]
+    return sep.join(thresholds)
+
+
+def classification_tree_to_dot(tree, feature_names, class_names, categorical_dict, dummy_indicator="(单选)", replacement={}):
     """ 把分类树转化成dot data
 
     参数
@@ -154,11 +172,11 @@ def classification_tree_to_dot(tree, feature_names, class_names, categorical_dic
         
         # get the feature name
         name = feature_name[node]
-        # judge whether a feature is dummy or not by the indicator "_isDummy_"
-        if "_isDummy_" in str(name) and name.split('_isDummy_')[0] in list(categorical_dict.keys()):
+        # judge whether a feature is dummy or not by the indicator dummy_indicator
+        if dummy_indicator in str(name) and name.split(dummy_indicator)[0] in list(categorical_dict.keys()):
             is_dummy = True
             # if the feature is dummy, the threshold is the value following name
-            name, threshold = name.split('_isDummy_')[0], name.split('_isDummy_')[1]
+            name, threshold = name.split(dummy_indicator)[0], name.split(dummy_indicator)[1]
         
         # get the data distribution of current node
         value = tree_.value[node][0]
@@ -186,7 +204,7 @@ def classification_tree_to_dot(tree, feature_names, class_names, categorical_dic
                 if len(categorical_dict[name])>5:
                     # only show one category on edge
                     # threshold_left = "not " + threshold
-                    threshold_left = "非" + threshold
+                    threshold_left = not_word + threshold
                     threshold_right = threshold
                 else:
                     # if total categories <= 5, list all the categories on edge
@@ -196,6 +214,12 @@ def classification_tree_to_dot(tree, feature_names, class_names, categorical_dic
                 # if the feature is not dummy, then it is numerical
                 threshold_left = "<="+ str(round(threshold,3))
                 threshold_right = ">"+ str(round(threshold,3))
+            
+            # 字符串特殊判断
+            
+            threshold_left = replace(threshold_left, replacement)
+            threshold_right = replace(threshold_right, replacement)
+                
             graphvic_str += ('{} -> {} [labeldistance=2.5, labelangle=45, headlabel="{}"] ;').format(node,tree_.children_left[node],threshold_left)
             graphvic_str += ('{} -> {} [labeldistance=2.5, labelangle=-45, headlabel="{}"] ;').format(node,tree_.children_right[node],threshold_right)
             #print(('{} -> {} [labeldistance=2.5, labelangle=45, headlabel="{}"] ;').format(node,tree_.children_left[node],threshold_left))
@@ -211,7 +235,7 @@ def classification_tree_to_dot(tree, feature_names, class_names, categorical_dic
     recurse(0, 1,categorical_dict)
     return graphvic_str + "}"
 
-def regression_tree_to_dot(tree, feature_names, categorical_dict):
+def regression_tree_to_dot(tree, feature_names, categorical_dict, dummy_indicator="(单选)", replacement={}):
     """ 把回归树转换成dot data
 
     参数
@@ -258,11 +282,11 @@ def regression_tree_to_dot(tree, feature_names, categorical_dict):
         
         # get the feature name
         name = feature_name[node]
-        # judge whether a feature is dummy or not by the indicator "_isDummy_"
-        if "_isDummy_" in str(name) and name.split('_isDummy_')[0] in list(categorical_dict.keys()):
+        # judge whether a feature is dummy or not by the indicator dummy_indicator
+        if dummy_indicator in str(name) and name.split(dummy_indicator)[0] in list(categorical_dict.keys()):
             is_dummy = True
             # if the feature is dummy, the threshold is the value following name
-            name, threshold = name.split('_isDummy_')[0], name.split('_isDummy_')[1]
+            name, threshold = name.split(dummy_indicator)[0], name.split(dummy_indicator)[1]
         
         # get the regression value
         value = round(tree_.value[node][0][0],3)
@@ -286,7 +310,7 @@ def regression_tree_to_dot(tree, feature_names, categorical_dict):
                 
                 if len(categorical_dict[name])>5:
                     # only show one category on edge
-                    threshold_left = "not " + threshold
+                    threshold_left = not_word + threshold
                     threshold_right = threshold
                 else:
                     # if total categories <= 5, list all the categories on edge
@@ -296,6 +320,10 @@ def regression_tree_to_dot(tree, feature_names, categorical_dict):
                 # if the feature is not dummy, then it is numerical
                 threshold_left = "<="+ str(round(threshold,3))
                 threshold_right = ">"+ str(round(threshold,3))
+            # 字符串特殊判断
+            threshold_left = replace(threshold_left, replacement)
+            threshold_right = replace(threshold_right, replacement)
+            
             graphvic_str += ('{} -> {} [labeldistance=2.5, labelangle=45, headlabel="{}"] ;').format(node,tree_.children_left[node],threshold_left)
             graphvic_str += ('{} -> {} [labeldistance=2.5, labelangle=-45, headlabel="{}"] ;').format(node,tree_.children_right[node],threshold_right)
             #print(('{} -> {} [labeldistance=2.5, labelangle=45, headlabel="{}"] ;').format(node,tree_.children_left[node],threshold_left))
